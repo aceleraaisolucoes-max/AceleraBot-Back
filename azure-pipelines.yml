@@ -23,5 +23,5 @@ steps:
 
   - script: |
       set -e
-      git push --force "https://$(GITHUB_PAT)@github.com/$(GITHUB_REPO).git" HEAD:refs/heads/main
+      git push --force "https://x-access-token:$(GITHUB_PAT)@github.com/$(GITHUB_REPO).git" HEAD:refs/heads/main
     displayName: 'Espelhar para o GitHub'
