@@ -27,14 +27,12 @@ services:
     healthCheckPath: /health
     autoDeploy: true
     envVars:
-      - key: NODE_ENV
-        value: production
       - key: PORT
         value: 3000
-      # Supabase (aplicação)
-      - key: SUPABASE_URL
-        sync: false
-      - key: SUPABASE_SERVICE_KEY
+      # Banco (Supabase Postgres via EF Core) — use o Session Pooler (IPv4) do Supabase:
+      # Settings > Database > Connection string > Session pooler. Formato Npgsql:
+      # Host=...pooler.supabase.com;Port=5432;Username=postgres.<ref>;Password=...;Database=postgres;SSL Mode=Require;Trust Server Certificate=true
+      - key: ConnectionStrings__Default
         sync: false
       # Google Gemini
       - key: GEMINI_API_KEY

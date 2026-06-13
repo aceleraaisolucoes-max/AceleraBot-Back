@@ -1,5 +1,13 @@
+# .NET
+bin/
+obj/
+*.user
+
+# Node (legado)
 node_modules/
 dist/
+
+# Ambiente / logs
 .env
 *.log
 .DS_Store

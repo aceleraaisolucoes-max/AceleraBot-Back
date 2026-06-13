@@ -1,23 +1,21 @@
-FROM node:22-alpine AS builder
+# ─── Build ─────────────────────────────────────────────────────────────────────
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+WORKDIR /src
 
+# restore (camada cacheável)
+COPY AceleraBot.Api/*.csproj AceleraBot.Api/
+RUN dotnet restore AceleraBot.Api/AceleraBot.Api.csproj
+
+# publish
+COPY AceleraBot.Api/ AceleraBot.Api/
+RUN dotnet publish AceleraBot.Api/AceleraBot.Api.csproj -c Release -o /app /p:UseAppHost=false
+
+# ─── Runtime ─────────────────────────────────────────────────────────────────────
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
-COPY package*.json ./
-RUN npm ci
+ENV ASPNETCORE_ENVIRONMENT=Production
+COPY --from=build /app .
 
-COPY tsconfig.json ./
-COPY src ./src
-RUN npm run build
-
-# ─── Imagem de produção ───────────────────────────────────────────────────────
-FROM node:22-alpine AS runner
-
-WORKDIR /app
-ENV NODE_ENV=production
-
-COPY package*.json ./
-RUN npm ci --omit=dev
-
-COPY --from=builder /app/dist ./dist
-
+# O app lê a env PORT (injetada pelo Render) e ouve em 0.0.0.0:$PORT
 EXPOSE 3000
-CMD ["node", "dist/app.js"]
+ENTRYPOINT ["dotnet", "AceleraBot.Api.dll"]
