@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "AceleraBot — Backend API para chatbot de IA no WhatsApp",
   "main": "dist/app.js",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/app.ts",
     "build": "tsc",
