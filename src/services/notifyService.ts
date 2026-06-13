@@ -62,6 +62,37 @@ export async function notifyBusinessOwner(
     .eq('id', conversationId);
 }
 
+/**
+ * Notifica o dono do negócio sobre um novo agendamento confirmado no calendário.
+ */
+export async function notifyBusinessOwnerAboutAppointment(
+  clientId: string,
+  leadPhone: string,
+  appointmentData: { name: string; service: string; date: string; time: string }
+): Promise<void> {
+  // 1. Buscar dados do cliente (dono do negócio)
+  const { data: client } = await supabase
+    .from('clients')
+    .select('business_name, whatsapp_number, notification_number, instance_name')
+    .eq('id', clientId)
+    .single();
+
+  if (!client) return;
+
+  // 2. Formatar a mensagem de agendamento
+  const notificationPhone = client.notification_number ?? client.whatsapp_number;
+  const instanceName = client.instance_name;
+  const message = buildAppointmentNotificationMessage(leadPhone, appointmentData);
+
+  // 3. Enviar mensagem WhatsApp para o dono
+  await sendTextMessage({
+    instanceName,
+    to: notificationPhone,
+    text: message,
+    delay: 500,
+  });
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function buildNotificationMessage(leadPhone: string, leadData: LeadData): string {
@@ -84,3 +115,29 @@ function buildNotificationMessage(leadPhone: string, leadData: LeadData): string
 
   return lines.join('\n');
 }
+
+function buildAppointmentNotificationMessage(
+  leadPhone: string,
+  appt: { name: string; service: string; date: string; time: string }
+): string {
+  // Formatar data para exibição pt-BR
+  const [year, month, day] = appt.date.split('-');
+  const formattedDate = `${day}/${month}/${year}`;
+
+  return [
+    '📅 *NOVO AGENDAMENTO CONFIRMADO!*',
+    '',
+    `👤 *Cliente:* ${appt.name}`,
+    `📱 *WhatsApp:* +${leadPhone}`,
+    `🛠️ *Serviço:* ${appt.service}`,
+    `📆 *Data:* ${formattedDate}`,
+    `⏰ *Horário:* ${appt.time}`,
+    `✅ *Status:* Salvo no Google Calendar`,
+    '',
+    '👇 *Ver no painel do AceleraAssistente:*',
+    `https://wa.me/${leadPhone}`,
+    '',
+    '_AceleraAssistente — Simplificando sua agenda_ 🤖'
+  ].join('\n');
+}
+

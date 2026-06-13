@@ -7,6 +7,8 @@ import { webhookRouter } from './routes/webhook';
 import { clientsRouter } from './routes/clients';
 import { conversationsRouter } from './routes/conversations';
 import { leadsRouter } from './routes/leads';
+import { googleRouter } from './routes/google';
+import { appointmentsRouter } from './routes/appointments';
 
 const app = express();
 const PORT = process.env.PORT ?? 3000;
@@ -31,6 +33,8 @@ app.use('/webhook', webhookRouter);
 app.use('/clients', clientsRouter);
 app.use('/conversations', conversationsRouter);
 app.use('/leads', leadsRouter);
+app.use('/google', googleRouter);
+app.use('/appointments', appointmentsRouter);
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 

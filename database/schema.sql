@@ -135,3 +135,60 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER trg_clients_updated_at
   BEFORE UPDATE ON public.clients
   FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+-- ─── Tabela: google_calendar_configs ─────────────────────────────────────────
+-- Integração do Google Calendar por cliente
+CREATE TABLE IF NOT EXISTS public.google_calendar_configs (
+  id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id          UUID NOT NULL REFERENCES public.clients(id) ON DELETE CASCADE,
+  access_token       TEXT NOT NULL,
+  refresh_token      TEXT,
+  expiry_date        BIGINT, -- Timestamp de expiração do access_token em milissegundos
+  calendar_id        TEXT NOT NULL DEFAULT 'primary',
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(client_id)
+);
+
+-- ─── Tabela: appointments ─────────────────────────────────────────────────────
+-- Tabela de Agendamentos (substituirá/complementará o conceito de leads qualificados)
+CREATE TABLE IF NOT EXISTS public.appointments (
+  id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id          UUID NOT NULL REFERENCES public.clients(id) ON DELETE CASCADE,
+  conversation_id    UUID REFERENCES public.conversations(id) ON DELETE SET NULL,
+  lead_phone         TEXT NOT NULL,
+  lead_name          TEXT,
+  service_name       TEXT,
+  start_time         TIMESTAMPTZ NOT NULL,
+  end_time           TIMESTAMPTZ NOT NULL,
+  google_event_id    TEXT,
+  status             TEXT NOT NULL DEFAULT 'scheduled' CHECK (status IN ('scheduled', 'cancelled')),
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Índices para busca rápida de agendamentos
+CREATE INDEX IF NOT EXISTS idx_appointments_client ON public.appointments(client_id, start_time);
+CREATE INDEX IF NOT EXISTS idx_appointments_conversation ON public.appointments(conversation_id);
+
+-- RLS para as novas tabelas
+ALTER TABLE public.google_calendar_configs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.appointments ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Client accesses own calendar config"
+  ON public.google_calendar_configs FOR ALL
+  USING (client_id IN (SELECT id FROM public.clients WHERE user_id = auth.uid()));
+
+CREATE POLICY "Client accesses own appointments"
+  ON public.appointments FOR ALL
+  USING (client_id IN (SELECT id FROM public.clients WHERE user_id = auth.uid()));
+
+-- Triggers de updated_at para as novas tabelas
+CREATE TRIGGER trg_google_calendar_configs_updated_at
+  BEFORE UPDATE ON public.google_calendar_configs
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+CREATE TRIGGER trg_appointments_updated_at
+  BEFORE UPDATE ON public.appointments
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+

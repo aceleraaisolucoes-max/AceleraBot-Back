@@ -1,0 +1,43 @@
+# Azure DevOps Pipeline — Backend AceleraBot
+# Builda a imagem Docker, publica no registry e dispara o redeploy no Render.
+#
+# Variáveis a definir em Pipelines > Edit > Variables (marque "secret" onde indicado):
+#   REGISTRY            host do registry. Ex.: ghcr.io
+#   IMAGE               caminho completo da imagem. Ex.: ghcr.io/SEU_USUARIO/acelera-bot-api
+#   REGISTRY_USERNAME   usuário do registry  (secret)
+#   REGISTRY_PASSWORD   token/senha do registry (secret). GHCR: PAT com write:packages
+#   RENDER_DEPLOY_HOOK  URL do Deploy Hook do serviço no Render (secret)
+
+trigger:
+  branches:
+    include: [main]
+  paths:
+    include:
+      - src
+      - package.json
+      - package-lock.json
+      - Dockerfile
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - task: NodeTool@0
+    inputs:
+      versionSpec: '20.x'
+    displayName: 'Use Node 20'
+
+  - script: |
+      npm ci
+      npx tsc --noEmit
+    displayName: 'Install & type-check'
+
+  - script: |
+      echo "$(REGISTRY_PASSWORD)" | docker login "$(REGISTRY)" -u "$(REGISTRY_USERNAME)" --password-stdin
+      docker build -t "$(IMAGE):$(Build.BuildId)" -t "$(IMAGE):latest" .
+      docker push "$(IMAGE):$(Build.BuildId)"
+      docker push "$(IMAGE):latest"
+    displayName: 'Build & push image'
+
+  - script: curl -fsSL -X POST "$(RENDER_DEPLOY_HOOK)"
+    displayName: 'Trigger Render deploy'

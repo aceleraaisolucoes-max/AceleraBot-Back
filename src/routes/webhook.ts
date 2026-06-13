@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { supabase } from '../lib/supabase';
 import { generateAIResponse, ChatMessage } from '../services/aiService';
 import { sendTextMessage } from '../services/whatsappService';
-import { notifyBusinessOwner } from '../services/notifyService';
+import { notifyBusinessOwner, notifyBusinessOwnerAboutAppointment } from '../services/notifyService';
 
 export const webhookRouter = Router();
 
@@ -45,7 +45,7 @@ webhookRouter.post('/:clientId', async (req: Request, res: Response) => {
     if (event !== 'messages.upsert') return;
     if (data.key.fromMe) return;
 
-    const clientId = req.params.clientId;
+    const clientId = req.params.clientId as string;
     const leadPhone = data.key.remoteJid.replace('@s.whatsapp.net', '');
     const leadName = data.pushName;
 
@@ -108,14 +108,20 @@ webhookRouter.post('/:clientId', async (req: Request, res: Response) => {
       .order('created_at', { ascending: true })
       .limit(30); // Últimas 30 mensagens para evitar exceder contexto
 
-    const chatHistory: ChatMessage[] = (history ?? []).map(m => ({
+    const chatHistory: ChatMessage[] = (history ?? []).map((m: { role: string; content: string }) => ({
       role: m.role === 'user' ? 'user' : 'model',
       parts: [{ text: m.content }],
     }));
 
     // ── 5. Gerar resposta da IA ──────────────────────────────────────────────
 
-    const aiResponse = await generateAIResponse(clientId, userMessage, chatHistory);
+    const aiResponse = await generateAIResponse(
+      clientId,
+      userMessage,
+      chatHistory,
+      leadPhone,
+      conversation.id
+    );
 
     // ── 6. Salvar resposta da IA ─────────────────────────────────────────────
 
@@ -125,10 +131,13 @@ webhookRouter.post('/:clientId', async (req: Request, res: Response) => {
       content: aiResponse.text,
     });
 
-    // Atualizar score da conversa
+    // Atualizar score/status da conversa se agendado
     await supabase
       .from('conversations')
-      .update({ lead_score: aiResponse.leadScore })
+      .update({ 
+        lead_score: aiResponse.isScheduled ? 100 : conversation.lead_score,
+        status: aiResponse.isScheduled ? 'qualified' : conversation.status
+      })
       .eq('id', conversation.id);
 
     // ── 7. Buscar instance_name do cliente ───────────────────────────────────
@@ -149,14 +158,13 @@ webhookRouter.post('/:clientId', async (req: Request, res: Response) => {
       text: aiResponse.text,
     });
 
-    // ── 9. Notificar dono se lead qualificado ────────────────────────────────
+    // ── 9. Notificar dono se agendamento realizado ───────────────────────────
 
-    if (aiResponse.isQualifiedLead && conversation.status !== 'qualified') {
-      await notifyBusinessOwner(
+    if (aiResponse.isScheduled && aiResponse.appointmentData) {
+      await notifyBusinessOwnerAboutAppointment(
         clientId,
         leadPhone,
-        conversation.id,
-        aiResponse.leadData ?? {}
+        aiResponse.appointmentData
       );
     }
   } catch (err) {

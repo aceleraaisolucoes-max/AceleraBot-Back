@@ -1,0 +1,105 @@
+# Render — REFERÊNCIA de configuração dos serviços do AceleraBot.
+#
+# ⚠️ IMPORTANTE: este arquivo NÃO é aplicado automaticamente. Os Blueprints do
+# Render exigem um repositório conectado ao GitHub/GitLab/Bitbucket, e o código
+# do AceleraBot está no Azure DevOps. Portanto, crie os serviços MANUALMENTE no
+# painel do Render usando os valores abaixo (tipo "Existing Image"), conforme o
+# passo a passo em DEPLOY.md. Mantemos este arquivo como fonte-da-verdade da
+# configuração (imagens, variáveis, plano).
+#
+# Docs: https://render.com/docs/blueprint-spec  |  https://doc.evolution-api.com
+
+databases:
+  # Banco dedicado da Evolution API (NÃO use o Supabase da aplicação — a Evolution
+  # cria dezenas de tabelas próprias). Tier free expira; ver caveat no DEPLOY.md.
+  - name: evolution-db
+    plan: free
+    databaseName: evolution
+    user: evolution
+
+services:
+  # ─── Backend Express (Card 06) ──────────────────────────────────────────────
+  # Imagem buildada pelo Azure Pipelines (azure-pipelines.yml) e publicada no
+  # registry. Troque <REGISTRY>/<ORG> pelo seu (ex.: ghcr.io/projetojubarte).
+  - type: web
+    name: acelera-bot-api
+    runtime: image
+    image:
+      url: ghcr.io/SEU_USUARIO/acelera-bot-api:latest
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3000
+      # Supabase (aplicação)
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      # Google Gemini
+      - key: GEMINI_API_KEY
+        sync: false
+      # Evolution API — URL pública do serviço abaixo + chave mestra
+      - key: EVOLUTION_API_URL
+        sync: false            # = URL pública do acelera-evolution-api
+      - key: EVOLUTION_API_KEY
+        sync: false
+      # Redis (Upstash já provisionado)
+      - key: REDIS_URL
+        sync: false
+      # URLs de integração (preencher após deploy do front e deste serviço)
+      - key: DASHBOARD_URL
+        sync: false
+      - key: APP_URL
+        sync: false
+      # Google Calendar OAuth
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REDIRECT_URI
+        sync: false
+      # Notificações
+      - key: PLATFORM_OWNER_WHATSAPP
+        sync: false
+
+  # ─── Evolution API / WhatsApp (Card 05) ─────────────────────────────────────
+  # Imagem pública oficial. Confirme o nome exato das variáveis para a versão da
+  # imagem no momento do deploy (a Evolution renomeia envs entre majors).
+  # ATENÇÃO: no plano free o serviço hiberna após inatividade, derrubando a
+  # sessão do WhatsApp; ver caveat no DEPLOY.md.
+  - type: web
+    name: acelera-evolution-api
+    runtime: image
+    image:
+      url: atendai/evolution-api:latest
+    plan: free
+    envVars:
+      - key: SERVER_URL
+        sync: false            # = URL pública deste serviço (após 1º deploy)
+      - key: AUTHENTICATION_API_KEY
+        sync: false            # = mesmo valor de EVOLUTION_API_KEY do backend
+      # Banco
+      - key: DATABASE_ENABLED
+        value: "true"
+      - key: DATABASE_PROVIDER
+        value: postgresql
+      - key: DATABASE_CONNECTION_URI
+        fromDatabase:
+          name: evolution-db
+          property: connectionString
+      - key: DATABASE_SAVE_DATA_INSTANCE
+        value: "true"
+      - key: DATABASE_SAVE_DATA_NEW_MESSAGE
+        value: "true"
+      # Cache Redis (Upstash)
+      - key: CACHE_REDIS_ENABLED
+        value: "true"
+      - key: CACHE_REDIS_URI
+        sync: false            # = REDIS_URL (rediss://...)
+      - key: CACHE_REDIS_PREFIX_KEY
+        value: evolution
+      - key: CACHE_LOCAL_ENABLED
+        value: "false"
