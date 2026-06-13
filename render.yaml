@@ -1,11 +1,11 @@
-# Render — REFERÊNCIA de configuração dos serviços do AceleraBot.
+# Render Blueprint — AceleraBot (backend + Evolution API + Postgres da Evolution)
 #
-# ⚠️ IMPORTANTE: este arquivo NÃO é aplicado automaticamente. Os Blueprints do
-# Render exigem um repositório conectado ao GitHub/GitLab/Bitbucket, e o código
-# do AceleraBot está no Azure DevOps. Portanto, crie os serviços MANUALMENTE no
-# painel do Render usando os valores abaixo (tipo "Existing Image"), conforme o
-# passo a passo em DEPLOY.md. Mantemos este arquivo como fonte-da-verdade da
-# configuração (imagens, variáveis, plano).
+# Use este arquivo como Blueprint no Render APONTANDO PARA O REPO ESPELHO NO GITHUB
+# (o Azure DevOps empurra o código para lá via azure-pipelines.yml). O Render builda
+# o backend a partir do Dockerfile e cria os demais serviços.
+#
+# Variáveis com `sync: false` NÃO ficam no repositório — preencha no painel do
+# Render (serviço > Environment) durante o deploy. Veja DEPLOY.md.
 #
 # Docs: https://render.com/docs/blueprint-spec  |  https://doc.evolution-api.com
 
@@ -19,15 +19,13 @@ databases:
 
 services:
   # ─── Backend Express (Card 06) ──────────────────────────────────────────────
-  # Imagem buildada pelo Azure Pipelines (azure-pipelines.yml) e publicada no
-  # registry. Troque <REGISTRY>/<ORG> pelo seu (ex.: ghcr.io/projetojubarte).
   - type: web
     name: acelera-bot-api
-    runtime: image
-    image:
-      url: ghcr.io/SEU_USUARIO/acelera-bot-api:latest
+    runtime: docker
+    dockerfilePath: ./Dockerfile
     plan: free
     healthCheckPath: /health
+    autoDeploy: true
     envVars:
       - key: NODE_ENV
         value: production

@@ -2,68 +2,70 @@
 
 Guia passo a passo para subir a infraestrutura completa (Cards 05, 06, 07).
 
-> **Hospedagem do código:** os repositórios estão no **Azure DevOps**. Render e
-> Vercel **não** conectam auto-deploy ao Azure DevOps, então usamos:
-> - **Backend:** imagem Docker publicada num registry → serviço Render "Existing Image".
-> - **Evolution API:** imagem pública oficial → serviço Render "Existing Image".
-> - **Frontend:** deploy via **Vercel CLI**.
->
-> A automação está nos arquivos `azure-pipelines.yml` (um em cada repo).
+## Estratégia de hospedagem
 
-## Visão geral da ordem (há dependências de URL entre serviços)
+O código fica no **Azure DevOps**, mas Render e Vercel só fazem auto-deploy a
+partir de GitHub. Solução: um **pipeline de espelhamento** empurra cada push da
+`main` (Azure) para um repositório-espelho no **GitHub**; Render e Vercel ficam
+conectados ao GitHub e fazem o deploy sozinhos.
 
 ```
-1. Supabase (schema)          →  banco pronto
-2. Registry + imagem backend  →  imagem disponível
-3. Evolution API (Render)     →  EVOLUTION_API_URL
-4. Backend (Render)           →  APP_URL
-5. Frontend (Vercel)          →  DASHBOARD_URL
-6. Fechar variáveis no backend (DASHBOARD_URL, GOOGLE_REDIRECT_URI) + redeploy
-7. Google Cloud OAuth (redirect URIs)
+push na main (Azure DevOps)
+   └─ azure-pipelines.yml (mirror) ─→ GitHub (espelho)
+                                         ├─→ Render  : backend + Evolution API
+                                         └─→ Vercel  : frontend
 ```
 
-Use o doc de **Credenciais e Chaves de Ambiente** para todos os valores secretos.
+Você continua commitando **apenas no Azure DevOps**.
+
+> Todos os valores secretos estão no doc **"Credenciais e Chaves de Ambiente"**.
+> Nunca cole segredos neste arquivo (ele é versionado) — use o painel de cada serviço.
+
+## Ordem de execução (há dependências de URL entre serviços)
+
+```
+0. GitHub: criar repos-espelho + PAT          → automação de mirror
+1. Supabase (schema)                           → ✅ já aplicado
+2. Render: Evolution API (+ Postgres + Redis)  → EVOLUTION_API_URL
+3. Render: Backend (Blueprint)                 → APP_URL
+4. Vercel: Frontend                            → DASHBOARD_URL
+5. Fechar variáveis no backend + redeploy
+6. Google Cloud: OAuth redirect URIs
+```
 
 ---
 
-## 1. Supabase — schema do banco
+## 0. GitHub — repos-espelho + automação
 
-1. Acesse o projeto no [Supabase](https://supabase.com) (Project ID do doc de credenciais).
-2. **SQL Editor → New query** → cole o conteúdo de [`database/schema.sql`](database/schema.sql) → **Run**.
-3. **Table Editor**: confirme as **7 tabelas**: `clients`, `knowledge_base`,
-   `conversations`, `messages`, `leads`, `google_calendar_configs`, `appointments`.
-4. Guarde `SUPABASE_URL` e a **service key** (`SUPABASE_SERVICE_KEY`).
-
----
-
-## 2. Registry + imagem do backend
-
-O backend roda como imagem Docker. Recomendado: **GHCR** (GitHub Container
-Registry), usando a conta GitHub do doc de credenciais.
-
-**Opção A — Build manual (primeiro deploy, sem pipeline):**
-```bash
-# na raiz do backend
-docker build -t ghcr.io/SEU_USUARIO/acelera-bot-api:latest .
-echo "<SEU_PAT>" | docker login ghcr.io -u SEU_USUARIO --password-stdin
-docker push ghcr.io/SEU_USUARIO/acelera-bot-api:latest
-```
-- `<SEU_PAT>`: GitHub Personal Access Token com escopo `write:packages`.
-- Em GHCR, deixe o pacote **público** (Package settings → Change visibility) para o
-  Render puxar sem credenciais, ou configure credenciais no Render (passo 4).
-
-**Opção B — Automático (Azure Pipelines):** configure `azure-pipelines.yml`
-(variáveis `REGISTRY`, `IMAGE`, `REGISTRY_USERNAME`, `REGISTRY_PASSWORD`,
-`RENDER_DEPLOY_HOOK`) — ele builda, publica e dispara o redeploy a cada push na `main`.
-Faça isto **depois** de criar o serviço no Render (passo 4), pois precisa do Deploy Hook.
+1. No [GitHub](https://github.com) (conta do doc), crie **dois repositórios vazios**
+   (sem README), por exemplo:
+   - `acelera-bot-api` (backend)
+   - `acelera-bot-front` (frontend)
+2. Gere um **Personal Access Token** com escrita nesses repos:
+   Settings → Developer settings → **Fine-grained tokens** → Repository access nos
+   2 repos → Permissions: **Contents = Read and write**. (Ou um token *classic* com
+   escopo `repo`.) Copie o token.
+3. Em **cada** projeto no Azure DevOps → **Pipelines → New pipeline → Azure Repos Git**
+   → selecione o repo → "Existing Azure Pipelines YAML file" → `/azure-pipelines.yml`.
+4. Antes de rodar, em **Variables** adicione:
+   - `GITHUB_REPO` = `usuario_ou_org/acelera-bot-api` (no front, `.../acelera-bot-front`)
+   - `GITHUB_PAT` = o token (marque **Keep this value secret**)
+5. **Run**. Confirme que o código apareceu nos repos do GitHub. A partir daqui, todo
+   push na `main` do Azure replica para o GitHub automaticamente.
 
 ---
 
-## 3. Evolution API no Render (Card 05)
+## 1. Supabase — ✅ concluído
 
-1. No [Render](https://render.com): primeiro crie o **Postgres** da Evolution:
-   **New → Postgres**, nome `evolution-db`, plano **Free**. Copie a **Internal
-   Connection String**.
+O schema (`database/schema.sql`) já foi aplicado; as tabelas existem. Nada a fazer.
+Tenha em mãos `SUPABASE_URL` e `SUPABASE_SERVICE_KEY` (do doc) para o passo 3.
+
+---
+
+## 2. Evolution API no Render (Card 05)
+
+1. No [Render](https://render.com): **New → PostgreSQL**, nome `evolution-db`,
+   plano **Free**. Copie a **Internal Connection String**.
 2. **New → Web Service → Deploy an existing image from a registry**:
    - Image URL: `atendai/evolution-api:latest`
    - Plano: **Free**
@@ -72,94 +74,79 @@ Faça isto **depois** de criar o serviço no Render (passo 4), pois precisa do D
 
    | Variável | Valor |
    |---|---|
-   | `AUTHENTICATION_API_KEY` | mesma chave mestra (= `EVOLUTION_API_KEY`) |
+   | `AUTHENTICATION_API_KEY` | **defina** uma chave mestra forte (guarde-a = `EVOLUTION_API_KEY`) |
    | `DATABASE_ENABLED` | `true` |
    | `DATABASE_PROVIDER` | `postgresql` |
    | `DATABASE_CONNECTION_URI` | connection string do `evolution-db` |
    | `DATABASE_SAVE_DATA_INSTANCE` | `true` |
    | `DATABASE_SAVE_DATA_NEW_MESSAGE` | `true` |
    | `CACHE_REDIS_ENABLED` | `true` |
-   | `CACHE_REDIS_URI` | `REDIS_URL` do Upstash (`rediss://...`) |
+   | `CACHE_REDIS_URI` | `REDIS_URL` do Upstash (formato `rediss://default:...@host:6379`) |
    | `CACHE_REDIS_PREFIX_KEY` | `evolution` |
    | `CACHE_LOCAL_ENABLED` | `false` |
 
-4. Faça o deploy. Quando subir, copie a **URL pública** (ex.:
-   `https://acelera-evolution-api.onrender.com`).
-5. Volte em Environment e adicione `SERVER_URL` = essa URL. Redeploy.
-6. **Anote essa URL → será `EVOLUTION_API_URL` no backend.**
+4. Deploy. Copie a **URL pública** (ex.: `https://acelera-evolution-api.onrender.com`).
+5. Volte em Environment, adicione `SERVER_URL` = essa URL, e redeploy.
+6. **Anote a URL → será `EVOLUTION_API_URL` no backend.**
 
-> ⚠️ **Caveat free tier:** o serviço **hiberna após ~15 min de inatividade**, o que
-> derruba a sessão do WhatsApp (precisa reescanear o QR). Para produção real,
-> considere um plano pago ou um cron de "keep-alive". Aceitável para validação/MVP.
+> ⚠️ **Free tier hiberna após ~15 min** de inatividade, derrubando a sessão do
+> WhatsApp (precisa reescanear o QR). OK para validação; produção pede plano pago
+> ou keep-alive.
 
 ---
 
-## 4. Backend no Render (Card 06)
+## 3. Backend no Render (Card 06) — via Blueprint
 
-1. **New → Web Service → Deploy an existing image from a registry**:
-   - Image URL: `ghcr.io/SEU_USUARIO/acelera-bot-api:latest` (do passo 2)
-   - Plano: **Free**
-   - Health Check Path: `/health`
-   - Se a imagem for privada, configure as credenciais do registry no Render.
-2. Em **Environment**, adicione todas as variáveis (valores no doc de credenciais):
+1. **New → Blueprint** → conecte a conta GitHub → selecione o repo
+   **`acelera-bot-api`** (o espelho). O Render lê o [`render.yaml`](render.yaml) e
+   propõe criar o serviço `acelera-bot-api` (e o `evolution-db`, caso ainda não exista).
+2. Preencha as variáveis marcadas (todas com valores do doc de credenciais):
 
    | Variável | Valor |
    |---|---|
-   | `NODE_ENV` | `production` |
-   | `PORT` | `3000` |
-   | `SUPABASE_URL` / `SUPABASE_SERVICE_KEY` | do passo 1 |
+   | `SUPABASE_URL` / `SUPABASE_SERVICE_KEY` | do doc |
    | `GEMINI_API_KEY` | do doc |
-   | `EVOLUTION_API_URL` | URL do passo 3 |
-   | `EVOLUTION_API_KEY` | mesma chave mestra do passo 3 |
+   | `EVOLUTION_API_URL` | URL do passo 2 |
+   | `EVOLUTION_API_KEY` | a chave mestra que você definiu no passo 2 |
    | `REDIS_URL` | Upstash (`rediss://...`) |
    | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | do doc |
-   | `GOOGLE_REDIRECT_URI` | *(preenche no passo 6)* |
-   | `DASHBOARD_URL` | *(preenche no passo 6)* |
+   | `GOOGLE_REDIRECT_URI` | *(preenche no passo 5)* |
+   | `DASHBOARD_URL` | *(preenche no passo 5)* |
    | `APP_URL` | *(preenche após conhecer a URL deste serviço)* |
    | `PLATFORM_OWNER_WHATSAPP` | seu número `55DDDNUMERO` |
 
-3. Deploy. Copie a **URL pública** → essa é a `APP_URL`. Volte e preencha `APP_URL`.
-4. **Copie o Deploy Hook** (Settings → Deploy Hook) e use na variável
-   `RENDER_DEPLOY_HOOK` do `azure-pipelines.yml` (passo 2, Opção B).
-5. Valide: `GET {APP_URL}/health` deve retornar `{"status":"ok", ...}`.
+3. Deploy. Copie a **URL pública** → essa é a `APP_URL`; volte e preencha `APP_URL`.
+4. Valide: `GET {APP_URL}/health` → `{"status":"ok", ...}`.
+
+> A cada push na `main` (Azure → GitHub), o Render redeploya automaticamente.
 
 ---
 
-## 5. Frontend na Vercel (Card 07)
+## 4. Frontend na Vercel (Card 07)
 
-A Vercel não conecta ao Azure DevOps → deploy via CLI.
-
-**Primeiro deploy (local):**
-```bash
-# na raiz do frontend
-npm install -g vercel
-vercel login
-vercel link          # cria .vercel/project.json (ORG_ID e PROJECT_ID)
-vercel --prod
-```
-1. Em **Vercel → projeto → Settings → Environment Variables**, adicione
-   `NEXT_PUBLIC_BACKEND_URL` = `APP_URL` (URL do backend no Render). Redeploy.
-2. Copie a **URL de produção** (ex.: `https://acelera-front.vercel.app`).
+1. Em [vercel.com](https://vercel.com) → **Add New → Project** → **Import Git Repository**
+   → conecte o GitHub → selecione **`acelera-bot-front`**. A Vercel detecta o Next.js.
+2. **Environment Variables** → `NEXT_PUBLIC_BACKEND_URL` = `APP_URL` (URL do backend
+   no Render). **Deploy.**
+3. Copie a **URL de produção** (ex.: `https://acelera-bot-front.vercel.app`).
    **Anote → será `DASHBOARD_URL` no backend.**
 
-**Deploys seguintes (automático):** configure `azure-pipelines.yml` do front com
-`VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID` (os dois últimos saem do
-`.vercel/project.json` gerado pelo `vercel link`).
+> A cada push na `main`, a Vercel redeploya automaticamente.
 
 ---
 
-## 6. Fechar o ciclo de variáveis no backend
+## 5. Fechar o ciclo de variáveis no backend
 
-No serviço backend do Render (Environment), preencha/atualize e **redeploy**:
-- `DASHBOARD_URL` = URL do frontend (passo 5). Habilita CORS e o redirect pós-OAuth.
+No serviço `acelera-bot-api` (Render → Environment), preencha/atualize e **redeploy**:
+- `DASHBOARD_URL` = URL do frontend (passo 4). Habilita CORS e o redirect pós-OAuth.
 - `GOOGLE_REDIRECT_URI` = `{APP_URL}/google/callback`.
 
 ---
 
-## 7. Google Cloud Console — OAuth
+## 6. Google Cloud Console — OAuth
 
 Em [console.cloud.google.com](https://console.cloud.google.com) → **APIs &
-Services → Credentials → OAuth 2.0 Client ID**:
+Services → Credentials → OAuth 2.0 Client ID** (o do doc):
 - **Authorized redirect URIs:** adicione `{APP_URL}/google/callback`.
 - **Authorized JavaScript origins:** adicione a URL do frontend (Vercel).
 - Confirme que a **Google Calendar API** está habilitada no projeto.
@@ -169,20 +156,16 @@ Services → Credentials → OAuth 2.0 Client ID**:
 ## Verificação ponta a ponta
 
 1. **Health backend:** `GET {APP_URL}/health` → `{"status":"ok"}`.
-2. **Evolution viva:** criar instância via `POST {APP_URL}/clients` (payload de
-   cliente) e obter o QR code em `GET {APP_URL}/clients/{clientId}/qrcode`.
-   Escanear no WhatsApp e checar `GET {APP_URL}/clients/{clientId}/status` → `open`.
-3. **Frontend:** abrir a URL da Vercel, logar (`admin@teste.com` / `123456` —
-   auth ainda mockada) e confirmar que o dashboard carrega os dados do backend
-   **sem erro de CORS** (valida `DASHBOARD_URL`).
-4. **Fluxo WhatsApp:** enviar mensagem ao número conectado → o webhook
-   `POST {APP_URL}/webhook/{clientId}` deve responder via IA e registrar a
-   conversa/lead no Supabase.
-5. **OAuth Google:** abrir `GET {APP_URL}/google/auth?clientId=...` → consentimento
-   → callback grava tokens em `google_calendar_configs`.
+2. **Evolution viva:** `POST {APP_URL}/clients` (criar cliente) → `GET {APP_URL}/clients/{id}/qrcode`
+   → escanear no WhatsApp → `GET {APP_URL}/clients/{id}/status` deve dar `open`.
+3. **Frontend:** abrir a URL da Vercel, logar (`admin@teste.com` / `123456` — auth
+   ainda mockada) e confirmar que o dashboard carrega dados **sem erro de CORS**.
+4. **Fluxo WhatsApp:** enviar mensagem ao número conectado → webhook
+   `POST {APP_URL}/webhook/{clientId}` responde via IA e grava conversa/lead no Supabase.
+5. **OAuth Google:** `GET {APP_URL}/google/auth?clientId=...` → consentimento →
+   callback grava tokens em `google_calendar_configs`.
 
-> Para testar localmente sem credenciais reais, rode com `MOCK_MODE=true` (ver
-> `.env.example`): Gemini, WhatsApp e Google Calendar respondem com dados simulados.
+> Para testar local sem credenciais reais: rode com `MOCK_MODE=true` (ver `.env.example`).
 
 ---
 
@@ -191,3 +174,5 @@ Services → Credentials → OAuth 2.0 Client ID**:
 - **Auth real no frontend** (hoje mockada com `admin@teste.com`/`123456`).
 - **Integração Stripe** (pagamentos) — ainda não implementada no código.
 - **Fila BullMQ/Redis** no backend — dependência instalada mas não usada.
+- **`schema.sql` do repo está atrás do banco** (o banco já tem uma tabela `services`
+  adicionada por outro dev) — sincronizar quando for mexer em serviços/durações.
