@@ -6,5 +6,5 @@ namespace AceleraBot.Api.Controllers;
 public class HealthController : ControllerBase
 {
     [HttpGet("/health")]
-    public IActionResult Get() => Ok(new { status = "ok", timestamp = DateTime.UtcNow.ToString("o") });
+    public IActionResult Get() => Ok(new { status = "ok", version = "2026.06.23-deploytest", timestamp = DateTime.UtcNow.ToString("o") });
 }
