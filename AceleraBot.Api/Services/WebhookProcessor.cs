@@ -42,10 +42,10 @@ public class WebhookProcessor : BackgroundService
         var wpp = scope.ServiceProvider.GetRequiredService<IWhatsappService>();
         var notify = scope.ServiceProvider.GetRequiredService<INotifyService>();
 
-        // Card 14 — Handoff: se a conversa está em atendimento humano, apenas registra
+        // Feature #41 — Handoff: se a conversa está em atendimento humano, apenas registra
         // a mensagem (para o operador ver no dashboard) e NÃO aciona a IA.
         var human = await db.Conversations.FirstOrDefaultAsync(c =>
-            c.ClientId == clientId && c.LeadPhone == leadPhone && c.Status == "human_takeover");
+            c.ClientId == clientId && c.LeadPhone == leadPhone && c.Status == ConversationStatus.HumanTakeover);
         if (human is not null)
         {
             human.LeadName = leadName ?? human.LeadName;
@@ -58,7 +58,7 @@ public class WebhookProcessor : BackgroundService
 
         // 1. busca/cria conversa ativa
         var conversation = await db.Conversations.FirstOrDefaultAsync(c =>
-            c.ClientId == clientId && c.LeadPhone == leadPhone && c.Status == "active");
+            c.ClientId == clientId && c.LeadPhone == leadPhone && c.Status == ConversationStatus.Active);
         if (conversation is null)
         {
             conversation = new Conversation
@@ -66,7 +66,7 @@ public class WebhookProcessor : BackgroundService
                 ClientId = clientId,
                 LeadPhone = leadPhone,
                 LeadName = leadName,
-                Status = "active",
+                Status = ConversationStatus.Active,
                 LeadScore = 0,
             };
             db.Conversations.Add(conversation);
@@ -97,7 +97,7 @@ public class WebhookProcessor : BackgroundService
         if (aiResponse.IsScheduled)
         {
             conversation.LeadScore = 100;
-            conversation.Status = "qualified";
+            conversation.Status = ConversationStatus.Qualified;
         }
         await db.SaveChangesAsync();
 
