@@ -37,10 +37,20 @@ public class ConversationsController : ControllerBase
     }
 
     [HttpPatch("{conversationId:guid}/takeover")]
-    public Task<IActionResult> Takeover(Guid conversationId) => UpdateStatus(conversationId, "human_takeover");
+    public Task<IActionResult> Takeover(Guid conversationId)
+        => UpdateStatus(conversationId, ConversationStatus.HumanTakeover);
+
+    /// <summary>
+    /// Devolve o atendimento à IA após um human_takeover.
+    /// O próximo webhook recebido para esta conversa acionará a IA normalmente.
+    /// </summary>
+    [HttpPatch("{conversationId:guid}/resume")]
+    public Task<IActionResult> Resume(Guid conversationId)
+        => UpdateStatus(conversationId, ConversationStatus.Active);
 
     [HttpPatch("{conversationId:guid}/close")]
-    public Task<IActionResult> Close(Guid conversationId) => UpdateStatus(conversationId, "closed");
+    public Task<IActionResult> Close(Guid conversationId)
+        => UpdateStatus(conversationId, ConversationStatus.Closed);
 
     private async Task<IActionResult> UpdateStatus(Guid conversationId, string status)
     {
