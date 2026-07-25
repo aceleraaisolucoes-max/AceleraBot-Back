@@ -2,6 +2,7 @@ using System.Text.Json;
 using AceleraBot.Api.Data;
 using AceleraBot.Api.Services;
 using Microsoft.EntityFrameworkCore;
+using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -41,8 +42,20 @@ builder.Services.AddScoped<ICalendarService, CalendarService>();
 builder.Services.AddScoped<INotifyService, NotifyService>();
 builder.Services.AddScoped<IAiService, AiService>();
 
-// Fila + processador do webhook (fire-and-forget)
-builder.Services.AddSingleton<WebhookQueue>();
+// Fila + processador do webhook (fire-and-forget).
+// Card 16: fila durável no Redis quando REDIS_URL estiver configurado; senão, em memória.
+var redisUrl = builder.Configuration["REDIS_URL"];
+var mockMode = builder.Configuration["MOCK_MODE"] == "true";
+if (!mockMode && IsRealRedisUrl(redisUrl))
+{
+    var options = ParseRedisUrl(redisUrl!);
+    builder.Services.AddSingleton<IConnectionMultiplexer>(_ => ConnectionMultiplexer.Connect(options));
+    builder.Services.AddSingleton<IWebhookQueue, RedisWebhookQueue>();
+}
+else
+{
+    builder.Services.AddSingleton<IWebhookQueue, InMemoryWebhookQueue>();
+}
 builder.Services.AddHostedService<WebhookProcessor>();
 
 // CORS: origem = DASHBOARD_URL (fallback "*")
@@ -61,3 +74,38 @@ app.UseCors();
 app.MapControllers();
 
 app.Run();
+
+// ─── Helpers de configuração do Redis ────────────────────────────────────────
+
+// Considera configurado apenas se não for vazio nem o placeholder do .env.example.
+static bool IsRealRedisUrl(string? url) =>
+    !string.IsNullOrWhiteSpace(url)
+    && !url.Contains("host.upstash.io")
+    && !url.Contains(":senha@");
+
+// Converte rediss://user:password@host:port em ConfigurationOptions do StackExchange.Redis.
+static ConfigurationOptions ParseRedisUrl(string url)
+{
+    var uri = new Uri(url);
+    var opt = new ConfigurationOptions
+    {
+        Ssl = uri.Scheme == "rediss",
+        AbortOnConnectFail = false, // não derruba o startup se o Redis estiver indisponível
+    };
+    opt.EndPoints.Add(uri.Host, uri.Port);
+
+    if (!string.IsNullOrEmpty(uri.UserInfo))
+    {
+        var parts = uri.UserInfo.Split(':', 2);
+        if (parts.Length == 2)
+        {
+            if (!string.IsNullOrEmpty(parts[0])) opt.User = Uri.UnescapeDataString(parts[0]);
+            opt.Password = Uri.UnescapeDataString(parts[1]);
+        }
+        else
+        {
+            opt.Password = Uri.UnescapeDataString(parts[0]);
+        }
+    }
+    return opt;
+}
