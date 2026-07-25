@@ -5,36 +5,107 @@ using Microsoft.EntityFrameworkCore;
 namespace AceleraBot.Api.Services;
 
 // Consome a fila e executa o fluxo do webhook (espelha src/routes/webhook.ts).
+// Card 16 (Fase 4): uma tarefa por telefone — telefones distintos são processados em
+// paralelo (até WEBHOOK_MAX_CONCURRENCY), enquanto as mensagens de um mesmo telefone
+// permanecem sequenciais. O debounce agrupa rajadas numa única chamada à IA.
 public class WebhookProcessor : BackgroundService
 {
-    private readonly WebhookQueue _queue;
+    private readonly IWebhookQueue _queue;
     private readonly IServiceScopeFactory _scopes;
     private readonly ILogger<WebhookProcessor> _log;
+    private readonly int _debounceMs;
+    private readonly SemaphoreSlim _slots;
 
-    public WebhookProcessor(WebhookQueue queue, IServiceScopeFactory scopes, ILogger<WebhookProcessor> log)
+    // Telefones com tarefa em voo. Signalled = chegou mensagem nova desde o último drain,
+    // usado tanto para renovar a janela de debounce quanto para reciclar a tarefa no fim.
+    private sealed class Slot { public bool Signalled; }
+    private readonly Dictionary<PhoneKey, Slot> _inFlight = new();
+    private readonly object _gate = new();
+
+    public WebhookProcessor(IWebhookQueue queue, IServiceScopeFactory scopes, IConfiguration cfg, ILogger<WebhookProcessor> log)
     {
         _queue = queue; _scopes = scopes; _log = log;
+        _debounceMs = int.TryParse(cfg["WEBHOOK_DEBOUNCE_MS"], out var ms) && ms >= 0 ? ms : 1500;
+        var max = int.TryParse(cfg["WEBHOOK_MAX_CONCURRENCY"], out var c) && c > 0 ? c : 8;
+        _slots = new SemaphoreSlim(max, max);
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        await foreach (var (clientId, payload) in _queue.ReadAllAsync(stoppingToken))
+        try { await _queue.RecoverAsync(stoppingToken); }
+        catch (Exception e) { _log.LogError(e, "[Webhook] Falha na recuperação de pendências"); }
+
+        // O laço só despacha: nunca aguarda debounce nem IA, para não bloquear os
+        // demais telefones enquanto um deles está em janela ou aguardando a resposta.
+        await foreach (var key in _queue.ReadKeysAsync(stoppingToken))
         {
-            try { await ProcessAsync(clientId, payload); }
-            catch (Exception e) { _log.LogError(e, "[Webhook] Error processing message"); }
+            bool start;
+            lock (_gate)
+            {
+                if (_inFlight.TryGetValue(key, out var slot))
+                {
+                    slot.Signalled = true; // renova a janela da tarefa já em voo
+                    start = false;
+                }
+                else
+                {
+                    _inFlight[key] = new Slot();
+                    start = true;
+                }
+            }
+            if (start) _ = HandleAsync(key, stoppingToken);
         }
     }
 
-    private async Task ProcessAsync(Guid clientId, WebhookPayload payload)
+    // Ciclo de um telefone: debounce → drain → processa, repetindo enquanto chegarem
+    // mensagens novas. Sai quando o buffer fica sem sinal pendente.
+    private async Task HandleAsync(PhoneKey key, CancellationToken ct)
     {
-        if (payload.Event != "messages.upsert") return;
-        var data = payload.Data;
-        if (data?.Key is null || data.Key.FromMe) return;
+        try
+        {
+            while (true)
+            {
+                // Debounce deslizante: cada mensagem nova durante a espera reinicia a
+                // janela, de modo que a rajada inteira vire um único turno do usuário.
+                // O flag é sempre zerado antes do drain — o que estiver no buffer agora
+                // será lido a seguir, e um sinal posterior é que justifica outra volta.
+                while (true)
+                {
+                    lock (_gate) _inFlight[key].Signalled = false;
+                    if (_debounceMs == 0) break;
+                    await Task.Delay(_debounceMs, ct);
+                    lock (_gate) if (!_inFlight[key].Signalled) break;
+                }
 
-        var leadPhone = (data.Key.RemoteJid ?? "").Replace("@s.whatsapp.net", "");
-        var leadName = data.PushName;
-        var userMessage = data.Message?.Conversation ?? data.Message?.ExtendedTextMessage?.Text;
-        if (string.IsNullOrEmpty(userMessage)) return;
+                var messages = await _queue.DrainAsync(key);
+                if (messages.Count > 0)
+                {
+                    await _slots.WaitAsync(ct);
+                    try { await ProcessAsync(key.ClientId, key.Phone, messages); }
+                    catch (Exception e) { _log.LogError(e, "[Webhook] Error processing message"); }
+                    finally { _slots.Release(); }
+                }
+
+                // Encerra o ciclo; se um sinal entrou durante o processamento, refaz a volta.
+                lock (_gate)
+                {
+                    if (!_inFlight[key].Signalled) { _inFlight.Remove(key); return; }
+                }
+            }
+        }
+        catch (OperationCanceledException) { lock (_gate) _inFlight.Remove(key); }
+        catch (Exception e)
+        {
+            lock (_gate) _inFlight.Remove(key);
+            _log.LogError(e, "[Webhook] Falha no ciclo do telefone {Phone}", key.Phone);
+        }
+    }
+
+    private async Task ProcessAsync(Guid clientId, string leadPhone, IReadOnlyList<BufferedMessage> messages)
+    {
+        var leadName = messages.Select(m => m.Name).LastOrDefault(n => !string.IsNullOrEmpty(n));
+        // Coalescência: os textos recebidos em rajada viram um único turno do usuário.
+        var userMessage = string.Join("\n", messages.Select(m => m.Text));
 
         using var scope = _scopes.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -43,14 +114,15 @@ public class WebhookProcessor : BackgroundService
         var notify = scope.ServiceProvider.GetRequiredService<INotifyService>();
 
         // Card 14 — Handoff: se a conversa está em atendimento humano, apenas registra
-        // a mensagem (para o operador ver no dashboard) e NÃO aciona a IA.
+        // as mensagens (para o operador ver no dashboard) e NÃO aciona a IA.
         var human = await db.Conversations.FirstOrDefaultAsync(c =>
             c.ClientId == clientId && c.LeadPhone == leadPhone && c.Status == "human_takeover");
         if (human is not null)
         {
             human.LeadName = leadName ?? human.LeadName;
             human.LastMessageAt = DateTime.UtcNow;
-            db.Messages.Add(new Message { ConversationId = human.Id, Role = "user", Content = userMessage });
+            foreach (var m in messages)
+                db.Messages.Add(new Message { ConversationId = human.Id, Role = "user", Content = m.Text });
             await db.SaveChangesAsync();
             _log.LogInformation("[Webhook] Conversa {Id} em human_takeover — IA pausada", human.Id);
             return;
@@ -78,8 +150,9 @@ public class WebhookProcessor : BackgroundService
             conversation.LastMessageAt = DateTime.UtcNow;
         }
 
-        // 2. salva mensagem do usuário
-        db.Messages.Add(new Message { ConversationId = conversation.Id, Role = "user", Content = userMessage });
+        // 2. salva cada mensagem do usuário (fidelidade do histórico)
+        foreach (var m in messages)
+            db.Messages.Add(new Message { ConversationId = conversation.Id, Role = "user", Content = m.Text });
         await db.SaveChangesAsync();
 
         // 3. histórico (últimas 30)
@@ -89,7 +162,7 @@ public class WebhookProcessor : BackgroundService
             .Select(m => new ChatMessage(m.Role == "user" ? "user" : "model", m.Content))
             .ToList();
 
-        // 4. IA
+        // 4. IA (uma única chamada com os textos coalescidos)
         var aiResponse = await ai.GenerateResponseAsync(clientId, userMessage, history, leadPhone, conversation.Id);
 
         // 5. salva resposta + atualiza conversa

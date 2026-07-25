@@ -42,9 +42,15 @@ services:
         sync: false            # = URL pública do acelera-evolution-api
       - key: EVOLUTION_API_KEY
         sync: false
-      # Redis (Upstash já provisionado)
+      # Redis (Upstash já provisionado) — fila do webhook (Card 16).
+      # Sem REDIS_URL, a fila cai para memória (sem durabilidade entre restarts).
       - key: REDIS_URL
         sync: false
+      # Fila do webhook: janela de debounce e paralelismo entre telefones (Card 16)
+      - key: WEBHOOK_DEBOUNCE_MS
+        value: 1500
+      - key: WEBHOOK_MAX_CONCURRENCY
+        value: 8
       # URLs de integração (preencher após deploy do front e deste serviço)
       - key: DASHBOARD_URL
         sync: false

@@ -108,7 +108,7 @@ Tenha em mãos `SUPABASE_URL` e `SUPABASE_SERVICE_KEY` (do doc) para o passo 3.
    | `GEMINI_API_KEY` | do doc |
    | `EVOLUTION_API_URL` | URL do passo 2 |
    | `EVOLUTION_API_KEY` | a chave mestra que você definiu no passo 2 |
-   | `REDIS_URL` | Upstash (`rediss://...`) |
+   | `REDIS_URL` | Upstash (`rediss://...`) — fila do webhook; sem ela a fila fica em memória |
    | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | do doc |
    | `GOOGLE_REDIRECT_URI` | *(preenche no passo 5)* |
    | `DASHBOARD_URL` | *(preenche no passo 5)* |
