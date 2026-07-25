@@ -75,7 +75,7 @@ public class NotifyService : INotifyService
             NotifiedAt = DateTime.UtcNow,
         });
         var conv = await _db.Conversations.FirstOrDefaultAsync(c => c.Id == conversationId);
-        if (conv is not null) conv.Status = "qualified";
+        if (conv is not null) conv.Status = ConversationStatus.Qualified;
         await _db.SaveChangesAsync();
     }
 }
