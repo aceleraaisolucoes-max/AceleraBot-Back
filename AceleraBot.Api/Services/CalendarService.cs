@@ -9,6 +9,7 @@ public interface ICalendarService
 {
     string GetAuthUrl(Guid clientId);
     Task ExchangeCodeForTokensAsync(Guid clientId, string code);
+    Task<List<CalendarOption>?> ListCalendarsAsync(Guid clientId);
     Task<List<string>> ListFreeSlotsAsync(Guid clientId, string dateStr);
     Task<Appointment> CreateCalendarEventAsync(Guid clientId, AppointmentInfo info, string phone, Guid? conversationId);
     Task DeleteCalendarEventAsync(Guid clientId, string googleEventId);
@@ -80,6 +81,9 @@ public class CalendarService : ICalendarService
         }
 
         var existing = await _db.GoogleCalendarConfigs.Where(c => c.ClientId == clientId).ToListAsync();
+        // Card 13: preserva a agenda escolhida pelo usuário ao reautorizar —
+        // antes o reconnect sobrescrevia a seleção de volta para "primary".
+        var previousCalendarId = existing.FirstOrDefault()?.CalendarId;
         _db.GoogleCalendarConfigs.RemoveRange(existing);
         _db.GoogleCalendarConfigs.Add(new GoogleCalendarConfig
         {
@@ -87,9 +91,57 @@ public class CalendarService : ICalendarService
             AccessToken = accessToken,
             RefreshToken = refreshToken,
             ExpiryDate = expiryDate,
-            CalendarId = "primary",
+            CalendarId = string.IsNullOrEmpty(previousCalendarId) ? "primary" : previousCalendarId,
         });
         await _db.SaveChangesAsync();
+    }
+
+    /// <summary>
+    /// Lista as agendas da conta Google conectada (GET /users/me/calendarList).
+    /// O escopo calendar.readonly já é pedido no consentimento, então não há reautorização.
+    /// Retorna null quando o cliente não tem integração conectada.
+    /// </summary>
+    public async Task<List<CalendarOption>?> ListCalendarsAsync(Guid clientId)
+    {
+        var creds = await GetAccessTokenAsync(clientId);
+        if (creds is null) return null;
+
+        if (_isMock)
+        {
+            return new List<CalendarOption>
+            {
+                new() { Id = "primary", Summary = "Agenda Principal (mock)", Primary = true },
+                new() { Id = "acelera@group.calendar.google.com", Summary = "AceleraAssistente (mock)" },
+            };
+        }
+
+        var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new("Bearer", creds.Value.token);
+        var res = await client.GetAsync("https://www.googleapis.com/calendar/v3/users/me/calendarList?minAccessRole=writer");
+        if (!res.IsSuccessStatusCode)
+        {
+            _log.LogError("listCalendars failed: {Status}", res.StatusCode);
+            return null;
+        }
+
+        var json = await res.Content.ReadFromJsonAsync<JsonElement>();
+        var options = new List<CalendarOption>();
+        if (json.TryGetProperty("items", out var items))
+        {
+            foreach (var cal in items.EnumerateArray())
+            {
+                var id = cal.TryGetProperty("id", out var idv) ? idv.GetString() : null;
+                if (string.IsNullOrEmpty(id)) continue;
+                options.Add(new CalendarOption
+                {
+                    Id = id,
+                    Summary = cal.TryGetProperty("summary", out var s) ? s.GetString() ?? id : id,
+                    Primary = cal.TryGetProperty("primary", out var p) && p.ValueKind == JsonValueKind.True,
+                });
+            }
+        }
+        // Agenda principal primeiro, depois alfabética.
+        return options.OrderByDescending(o => o.Primary).ThenBy(o => o.Summary).ToList();
     }
 
     private async Task<(string token, string calendarId)?> GetAccessTokenAsync(Guid clientId)

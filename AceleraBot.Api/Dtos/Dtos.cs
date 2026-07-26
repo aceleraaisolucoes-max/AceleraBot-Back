@@ -22,6 +22,23 @@ public class CancelAppointmentRequest
     public string? ClientId { get; set; }
 }
 
+// Card 13: agenda escolhida no dropdown das Configurações.
+public class UpdateCalendarRequest
+{
+    public string? CalendarId { get; set; }
+}
+
+// ─── Google Calendar (Card 13) ───────────────────────────────────────────────
+
+// Uma agenda retornada por GET /google/calendars. Serializada em snake_case
+// pela política global → { id, summary, primary }.
+public class CalendarOption
+{
+    public string Id { get; set; } = "";
+    public string Summary { get; set; } = "";
+    public bool Primary { get; set; }
+}
+
 // ─── Webhook da Evolution (payload em camelCase, próprio da Evolution) ─────────
 // Todos os campos com [JsonPropertyName] explícito para ignorar a política global.
 
