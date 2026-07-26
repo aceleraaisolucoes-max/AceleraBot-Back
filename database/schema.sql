@@ -150,6 +150,34 @@ CREATE TABLE IF NOT EXISTS public.google_calendar_configs (
   UNIQUE(client_id)
 );
 
+-- ─── Tabela: services (Card 10) ───────────────────────────────────────────────
+-- Serviços oferecidos pelo negócio; alimentam a IA e o cálculo de horários livres.
+-- ATENÇÃO: o banco de produção já possuía uma tabela `services` criada fora deste
+-- arquivo. Confira as colunas antes de aplicar (o CREATE é idempotente e NÃO
+-- altera uma tabela existente com formato diferente).
+CREATE TABLE IF NOT EXISTS public.services (
+  id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id        UUID NOT NULL REFERENCES public.clients(id) ON DELETE CASCADE,
+  name             TEXT NOT NULL,
+  duration_minutes INTEGER NOT NULL DEFAULT 60 CHECK (duration_minutes BETWEEN 5 AND 1440),
+  price            NUMERIC(10,2) CHECK (price IS NULL OR price >= 0),
+  is_active        BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_services_client ON public.services(client_id, is_active);
+
+ALTER TABLE public.services ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Client accesses own services"
+  ON public.services FOR ALL
+  USING (client_id IN (SELECT id FROM public.clients WHERE user_id = auth.uid()));
+
+CREATE TRIGGER trg_services_updated_at
+  BEFORE UPDATE ON public.services
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
 -- ─── Tabela: appointments ─────────────────────────────────────────────────────
 -- Tabela de Agendamentos (substituirá/complementará o conceito de leads qualificados)
 CREATE TABLE IF NOT EXISTS public.appointments (

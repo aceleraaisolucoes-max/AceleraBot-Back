@@ -28,6 +28,25 @@ public class UpdateCalendarRequest
     public string? CalendarId { get; set; }
 }
 
+// ─── Serviços (Card 10) ──────────────────────────────────────────────────────
+
+public class CreateServiceRequest
+{
+    public string Name { get; set; } = "";
+    public int DurationMinutes { get; set; }
+    public decimal? Price { get; set; }
+    public bool? IsActive { get; set; }
+}
+
+// Campos nulos ficam inalterados — permite inativar sem reenviar o resto.
+public class UpdateServiceRequest
+{
+    public string? Name { get; set; }
+    public int? DurationMinutes { get; set; }
+    public decimal? Price { get; set; }
+    public bool? IsActive { get; set; }
+}
+
 // ─── Expediente / Business Hours (Card 11) ───────────────────────────────────
 
 // Faixa de atendimento de um dia, no formato HH:mm.

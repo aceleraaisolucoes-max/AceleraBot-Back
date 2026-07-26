@@ -23,6 +23,18 @@ public class Client
     public DateTime UpdatedAt { get; set; }
 }
 
+public class Service
+{
+    public Guid Id { get; set; }
+    public Guid ClientId { get; set; }
+    public string Name { get; set; } = "";
+    public int DurationMinutes { get; set; } = 60;
+    public decimal? Price { get; set; }
+    public bool IsActive { get; set; } = true;
+    public DateTime CreatedAt { get; set; }
+    public DateTime UpdatedAt { get; set; }
+}
+
 public class KnowledgeBase
 {
     public Guid Id { get; set; }

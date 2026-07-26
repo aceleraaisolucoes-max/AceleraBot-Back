@@ -13,6 +13,7 @@ public class AppDbContext : DbContext
     public DbSet<Lead> Leads => Set<Lead>();
     public DbSet<Appointment> Appointments => Set<Appointment>();
     public DbSet<GoogleCalendarConfig> GoogleCalendarConfigs => Set<GoogleCalendarConfig>();
+    public DbSet<Service> Services => Set<Service>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -20,7 +21,7 @@ public class AppDbContext : DbContext
         foreach (var clr in new[]
         {
             typeof(Client), typeof(KnowledgeBase), typeof(Conversation), typeof(Message),
-            typeof(Lead), typeof(Appointment), typeof(GoogleCalendarConfig)
+            typeof(Lead), typeof(Appointment), typeof(GoogleCalendarConfig), typeof(Service)
         })
         {
             b.Entity(clr).Property("Id").HasDefaultValueSql("gen_random_uuid()").ValueGeneratedOnAdd();
@@ -49,6 +50,12 @@ public class AppDbContext : DbContext
         {
             e.Property(x => x.CreatedAt).HasDefaultValueSql("now()").ValueGeneratedOnAdd();
             e.Property(x => x.UpdatedAt).HasDefaultValueSql("now()").ValueGeneratedOnAdd();
+        });
+        b.Entity<Service>(e =>
+        {
+            e.Property(x => x.CreatedAt).HasDefaultValueSql("now()").ValueGeneratedOnAdd();
+            e.Property(x => x.UpdatedAt).HasDefaultValueSql("now()").ValueGeneratedOnAdd();
+            e.Property(x => x.Price).HasPrecision(10, 2);
         });
     }
 }
