@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text.Json;
 using AceleraBot.Api.Data;
 using AceleraBot.Api.Dtos;
 using AceleraBot.Api.Services;
@@ -88,6 +90,62 @@ public class ClientsController : ControllerBase
         var status = await _wpp.GetInstanceStatusAsync(instance);
         return Ok(new { status });
     }
+
+    // Card 11: dias aceitos no mapa de expediente. A UI hoje edita apenas
+    // segunda a sexta, mas o backend aceita a semana toda para que estender
+    // a tela não exija mudança aqui.
+    private static readonly string[] ValidDays = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+
+    /// <summary>
+    /// Grava o expediente do negócio em clients.business_hours (JSONB).
+    /// Corpo: { "mon": { "open": "08:00", "close": "18:00" }, ... }.
+    /// Dias omitidos são considerados fechados; corpo vazio limpa o expediente.
+    /// </summary>
+    [HttpPatch("{clientId:guid}/business-hours")]
+    public async Task<IActionResult> UpdateBusinessHours(
+        Guid clientId,
+        [FromBody] Dictionary<string, BusinessHoursDay>? req)
+    {
+        if (req is null) return BadRequest(new { error = "business hours payload is required" });
+
+        var normalized = new Dictionary<string, Dictionary<string, string>>();
+        foreach (var (rawDay, hours) in req)
+        {
+            var day = rawDay.Trim().ToLowerInvariant();
+            if (!ValidDays.Contains(day))
+                return BadRequest(new { error = $"invalid day '{rawDay}' (use mon..sun)" });
+            if (hours is null)
+                return BadRequest(new { error = $"missing hours for '{day}'" });
+
+            if (!TryParseTime(hours.Open, out var open))
+                return BadRequest(new { error = $"invalid open time for '{day}' (use HH:mm)" });
+            if (!TryParseTime(hours.Close, out var close))
+                return BadRequest(new { error = $"invalid close time for '{day}' (use HH:mm)" });
+            if (close <= open)
+                return BadRequest(new { error = $"close must be after open for '{day}'" });
+
+            normalized[day] = new Dictionary<string, string>
+            {
+                ["open"] = open.ToString("HH\\:mm"),
+                ["close"] = close.ToString("HH\\:mm"),
+            };
+        }
+
+        try
+        {
+            var client = await _db.Clients.FirstOrDefaultAsync(c => c.Id == clientId);
+            if (client is null) return NotFound(new { error = "Client not found" });
+
+            client.BusinessHours = JsonSerializer.SerializeToDocument(normalized);
+            await _db.SaveChangesAsync();
+            return Ok(new { BusinessHours = client.BusinessHours });
+        }
+        catch (Exception ex) { return StatusCode(500, new { error = ex.Message }); }
+    }
+
+    private static bool TryParseTime(string? value, out TimeOnly time) =>
+        TimeOnly.TryParseExact(value?.Trim(), "HH:mm", CultureInfo.InvariantCulture,
+            DateTimeStyles.None, out time);
 
     [HttpDelete("{clientId:guid}")]
     public async Task<IActionResult> Delete(Guid clientId)

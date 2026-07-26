@@ -28,6 +28,17 @@ public class UpdateCalendarRequest
     public string? CalendarId { get; set; }
 }
 
+// ─── Expediente / Business Hours (Card 11) ───────────────────────────────────
+
+// Faixa de atendimento de um dia, no formato HH:mm.
+// O corpo do PATCH é um mapa { "mon": { "open": "08:00", "close": "18:00" }, ... };
+// dias ausentes significam fechado.
+public class BusinessHoursDay
+{
+    public string Open { get; set; } = "";
+    public string Close { get; set; } = "";
+}
+
 // ─── Google Calendar (Card 13) ───────────────────────────────────────────────
 
 // Uma agenda retornada por GET /google/calendars. Serializada em snake_case

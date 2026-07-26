@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using AceleraBot.Api.Data;
 using AceleraBot.Api.Dtos;
@@ -173,15 +174,73 @@ public class CalendarService : ICalendarService
         return (cfg.AccessToken, cfg.CalendarId);
     }
 
+    // Índice = (int)DayOfWeek. Chaves iguais às gravadas em clients.business_hours.
+    private static readonly string[] DayKeys = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+
+    // Grade padrão de quem ainda não configurou o expediente: 08:00..17:00 de hora em hora.
+    private static List<string> DefaultGrid() =>
+        Enumerable.Range(8, 10).Select(h => $"{h:D2}:00").ToList();
+
+    private static bool TryParseDate(string dateStr, out DateTime date) =>
+        DateTime.TryParseExact(dateStr, "yyyy-MM-dd", CultureInfo.InvariantCulture,
+            DateTimeStyles.None, out date)
+        || DateTime.TryParse(dateStr, CultureInfo.InvariantCulture, DateTimeStyles.None, out date);
+
+    /// <summary>
+    /// Card 11: monta a grade de horários do dia a partir de clients.business_hours.
+    /// Retorna null quando o cliente não configurou o expediente (usa a grade padrão),
+    /// e uma lista vazia quando o dia está fechado.
+    /// </summary>
+    private async Task<List<string>?> GetConfiguredGridAsync(Guid clientId, string dateStr)
+    {
+        if (!TryParseDate(dateStr, out var date)) return null;
+
+        var doc = await _db.Clients.AsNoTracking()
+            .Where(c => c.Id == clientId).Select(c => c.BusinessHours).FirstOrDefaultAsync();
+        if (doc is null || doc.RootElement.ValueKind != JsonValueKind.Object) return null;
+
+        // Dia ausente (inclusive com o expediente vazio) = fechado.
+        if (!doc.RootElement.TryGetProperty(DayKeys[(int)date.DayOfWeek], out var day)
+            || day.ValueKind != JsonValueKind.Object)
+            return new List<string>();
+
+        if (!TryGetTime(day, "open", out var open) || !TryGetTime(day, "close", out var close) || close <= open)
+        {
+            _log.LogWarning("business_hours inválido para o cliente {ClientId}; usando a grade padrão", clientId);
+            return null;
+        }
+
+        // Slots de hora em hora; o compromisso dura 1h, então o último precisa
+        // terminar até o horário de fechamento.
+        var slots = new List<string>();
+        for (var t = open; t.AddHours(1) <= close; t = t.AddHours(1))
+            slots.Add(t.ToString("HH\\:mm"));
+        return slots;
+    }
+
+    private static bool TryGetTime(JsonElement day, string field, out TimeOnly time)
+    {
+        time = default;
+        return day.TryGetProperty(field, out var v)
+            && v.ValueKind == JsonValueKind.String
+            && TimeOnly.TryParseExact(v.GetString(), "HH:mm", CultureInfo.InvariantCulture,
+                   DateTimeStyles.None, out time);
+    }
+
     public async Task<List<string>> ListFreeSlotsAsync(Guid clientId, string dateStr)
     {
-        var businessHours = Enumerable.Range(8, 10).Select(h => $"{h:D2}:00").ToList(); // 08:00..17:00
+        var configured = await GetConfiguredGridAsync(clientId, dateStr);
+        if (configured is { Count: 0 }) return configured; // dia fechado no expediente
+
+        var businessHours = configured ?? DefaultGrid();
         var creds = await GetAccessTokenAsync(clientId);
 
         if (creds is null)
         {
-            // Simulação (sem credenciais): fim de semana vazio, senão alguns horários
-            if (DateTime.TryParse(dateStr, out var d) && (d.DayOfWeek == DayOfWeek.Saturday || d.DayOfWeek == DayOfWeek.Sunday))
+            // Sem credenciais do Google: devolve a grade do expediente configurado.
+            if (configured is not null) return businessHours;
+            // Sem expediente configurado, mantém a simulação antiga.
+            if (TryParseDate(dateStr, out var d) && (d.DayOfWeek == DayOfWeek.Saturday || d.DayOfWeek == DayOfWeek.Sunday))
                 return new List<string>();
             return new List<string> { "09:00", "11:00", "14:00", "16:00" };
         }
